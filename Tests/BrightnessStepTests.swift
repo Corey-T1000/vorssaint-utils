@@ -49,6 +49,13 @@ enum BrightnessStepTests {
         enum Method: Equatable { case system, ddc, gamma }
         let id: UInt32
         var brightness: Double
+        var isActive = true
+        var method: Method? = .system
+    }
+    final class UserDefaults {
+        static let standard = UserDefaults()
+        var allDisplays = false
+        func bool(forKey key: String) -> Bool { key == DefaultsKey.brightnessKeysAllDisplays && allDisplays }
     }
 
     class Fixture {
@@ -57,6 +64,8 @@ enum BrightnessStepTests {
         let stateLock = NSLock()
         let workQueue = Queue()
         var displays: [BrightnessDisplay] = []
+        var pendingDisplayIDs = Set<UInt32>()
+        var stepped: [(id: UInt32, showOSD: Bool)] = []
         var levelKnownAt: [UInt32: Date] = [:]
         var ddcPendingSteps: [UInt32: Double] = [:]
         var reply: (current: UInt16, maximum: UInt16) = (0, 100)
@@ -73,6 +82,7 @@ enum BrightnessStepTests {
         func commitStep(from current: Double, delta: Double, to displayID: UInt32,
                         method: BrightnessDisplay.Method, showOSD: Bool) {
             committed.append(current + delta)
+            stepped.append((displayID, showOSD))
         }
         func ddcProbeLuminance(for id: UInt32, service: CFTypeRef) -> DDCProbe {
             .replied(current: reply.current, maximum: reply.maximum)
@@ -172,5 +182,31 @@ enum BrightnessStepTests {
         BrightnessBridge.setBrightnessSmooth = smoothCall
         suite.expect(missing.written && missing.calls == ["set 0.5625"],
                      "a system without the easing call gets the level directly")
+
+        // Brightness keys moving every display: each active display steps by
+        // the same amount from its own level, the overlay stays on the one
+        // the press was aimed at, and an inactive or switching display is
+        // left alone.
+        func keyPress(allDisplays: Bool) -> Service {
+            let linked = Service()
+            linked.displays = [BrightnessDisplay(id: 1, brightness: 0.5),
+                               BrightnessDisplay(id: 2, brightness: 0.25, method: .gamma),
+                               BrightnessDisplay(id: 3, brightness: 0.75, isActive: false),
+                               BrightnessDisplay(id: 4, brightness: 0.75),
+                               BrightnessDisplay(id: 5, brightness: 0.75, method: nil)]
+            linked.pendingDisplayIDs = [4]
+            UserDefaults.standard.allDisplays = allDisplays
+            linked.stepKeyPress(1, method: .system, delta: 0.0625, showOSD: true)
+            UserDefaults.standard.allDisplays = false
+            return linked
+        }
+        let single = keyPress(allDisplays: false)
+        suite.expect(single.stepped.map(\.id) == [1] && single.committed == [0.5625],
+                     "a key press moves only the display it is aimed at by default")
+        let every = keyPress(allDisplays: true)
+        suite.expect(every.stepped.map(\.id) == [2, 1] && every.committed == [0.3125, 0.5625],
+                     "with all displays linked, each active display steps the same amount from its own level")
+        suite.expect(every.stepped.map(\.showOSD) == [false, true],
+                     "the overlay stays on the display the press was aimed at")
     }
 }

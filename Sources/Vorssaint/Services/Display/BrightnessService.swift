@@ -147,6 +147,8 @@ final class BrightnessService: ObservableObject {
     /// the pointer, or the one the system's own keys move.
     private var functionKeysFollowPointer = false
     private var functionKeySystemTarget: CGDirectDisplayID?
+    /// Whether a plain key press moves every display, sampled the same way.
+    private var functionKeysAllDisplays = false
     /// The chosen key step, sampled the same way, for the presses this app
     /// sends on to the system as its own quarter steps.
     private var functionKeyStep = BrightnessSupport.KeyStep.standard
@@ -491,8 +493,8 @@ final class BrightnessService: ObservableObject {
             followsPointer: UserDefaults.standard.bool(forKey: DefaultsKey.brightnessKeysEnabled),
             pointerDisplay: pointerDisplay, primaryDisplay: CGMainDisplayID(), eligible: eligible),
               let method = displays.first(where: { $0.id == id })?.method else { return }
-        step(id, method: method, delta: keyStep.limited(delta),
-             showOSD: UserDefaults.standard.bool(forKey: DefaultsKey.brightnessOSDEnabled))
+        stepKeyPress(id, method: method, delta: keyStep.limited(delta),
+                     showOSD: UserDefaults.standard.bool(forKey: DefaultsKey.brightnessOSDEnabled))
     }
 
     /// Read at each press, like the other key options.
@@ -1142,6 +1144,7 @@ final class BrightnessService: ObservableObject {
         guard !tapsAreSuspended() else { return }
         let defaults = UserDefaults.standard
         let wantsKeyRouting = defaults.bool(forKey: DefaultsKey.brightnessKeysEnabled)
+        let wantsAllDisplays = defaults.bool(forKey: DefaultsKey.brightnessKeysAllDisplays)
         // An island away in full screen, or set to stay hidden until hover,
         // shows no notices while closed, so its keys keep the system's own
         // feedback. The plain key tap runs on its own thread and keeps this
@@ -1158,18 +1161,21 @@ final class BrightnessService: ObservableObject {
         let keyStep = self.keyStep
         let wantsFinerSteps = keyStep != .standard
         let wanted = SessionActivitySupport.tapShouldRun(
-            featureWanted: (running && (wantsKeyRouting || wantsBrightnessOSD || wantsFinerSteps))
+            featureWanted: (running && (wantsKeyRouting || wantsAllDisplays || wantsBrightnessOSD
+                                        || wantsFinerSteps))
                 || wantsKeyboardLight,
             accessibilityGranted: AXIsProcessTrusted(),
             sessionIsActive: SessionActivity.shared.isActive)
         if wanted { installKeyTap() } else { removeKeyTap() }
         // Other keyboards send brightness as plain key presses. Their
         // keystroke tap is only earned when this app answers a brightness key
-        // instead of the system: the pointer decides the target, an overlay
-        // or the island stands in for the system's own, or a finer step.
+        // instead of the system: the pointer decides the target, every display
+        // moves, an overlay or the island stands in for the system's own, or
+        // a finer step.
         if wanted, running, BrightnessSupport.answersPlainBrightnessKeys(followsPointer: wantsKeyRouting,
                                                                           overlayReplacesNative: wantsBrightnessOSD,
-                                                                          finerSteps: wantsFinerSteps) {
+                                                                          finerSteps: wantsFinerSteps,
+                                                                          allDisplays: wantsAllDisplays) {
             let hotKeys = UserDefaults(suiteName: "com.apple.symbolichotkeys")?
                 .dictionary(forKey: "AppleSymbolicHotKeys")
             let adjusts = BrightnessSupport.functionKeysAdjustBrightness(symbolicHotKeys: hotKeys)
@@ -1179,6 +1185,7 @@ final class BrightnessService: ObservableObject {
                 functionKeysAdjustBrightness = adjusts
                 overlayReplacesNativeOSD = overlayReplaces
                 functionKeysFollowPointer = wantsKeyRouting
+                functionKeysAllDisplays = wantsAllDisplays
                 functionKeySystemTarget = systemTarget
                 functionKeyStep = keyStep
             }
@@ -1418,8 +1425,9 @@ final class BrightnessService: ObservableObject {
             return nil
         }
 
-        let (followsPointer, systemTarget, overlayReplacesNative) = keyThreadLock.withLock {
-            (functionKeysFollowPointer, functionKeySystemTarget, overlayReplacesNativeOSD)
+        let (followsPointer, systemTarget, overlayReplacesNative, allDisplays) = keyThreadLock.withLock {
+            (functionKeysFollowPointer, functionKeySystemTarget, overlayReplacesNativeOSD,
+             functionKeysAllDisplays)
         }
         var pointerDisplay: CGDirectDisplayID = 0
         var matched: UInt32 = 0
@@ -1433,17 +1441,19 @@ final class BrightnessService: ObservableObject {
         stateLock.lock()
         let route = routes[displayID]
         stateLock.unlock()
-        guard let route, followsPointer || route.method == .system else { return leaveToSystem() }
+        guard let route, followsPointer || allDisplays || route.method == .system else { return leaveToSystem() }
         if route.method == .system {
             // Same rule the media keys follow, so both kinds of keyboard
             // behave alike: the built-in panel keeps the system's own handling
-            // and its animation unless the app's own overlay replaces it, and
-            // every other system-routed display has to be stepped here,
-            // because the system only ever moves its native target.
+            // and its animation unless the app's own overlay replaces it or
+            // every display moves, and every other system-routed display has
+            // to be stepped here, because the system only ever moves its
+            // native target.
             guard BrightnessSupport.stepsSystemRoutedDisplay(
                 followsPointer: followsPointer,
                 displayIsBuiltIn: CGDisplayIsBuiltin(displayID) != 0,
-                overlayReplacesNative: overlayReplacesNative
+                overlayReplacesNative: overlayReplacesNative,
+                allDisplays: allDisplays
             ), BrightnessBridge.setBrightness != nil else {
                 return leaveToSystem()
             }
@@ -1461,7 +1471,25 @@ final class BrightnessService: ObservableObject {
                               method: BrightnessDisplay.Method) {
         // The island shows the step on its own; the overlay needs its option.
         let showOSD = UserDefaults.standard.bool(forKey: DefaultsKey.brightnessOSDEnabled)
-        step(displayID, method: method, delta: keyStep.limited(press.delta), showOSD: showOSD)
+        stepKeyPress(displayID, method: method, delta: keyStep.limited(press.delta), showOSD: showOSD)
+    }
+
+    /// Steps the display a key press or shortcut is aimed at. With the keys
+    /// moving every display, each other active display steps by the same
+    /// amount from its own level; the overlay stays on the aimed display.
+    private func stepKeyPress(_ displayID: CGDirectDisplayID,
+                              method: BrightnessDisplay.Method,
+                              delta: Double,
+                              showOSD: Bool) {
+        let allDisplays = UserDefaults.standard.bool(forKey: DefaultsKey.brightnessKeysAllDisplays)
+        let eligible = displays.filter { $0.isActive && $0.method != nil
+            && !pendingDisplayIDs.contains($0.id) }
+        for id in BrightnessSupport.keyStepTargets(aimedAt: displayID, allDisplays: allDisplays,
+                                                   eligible: eligible.map(\.id)) {
+            guard let targetMethod = id == displayID ? method
+                    : eligible.first(where: { $0.id == id })?.method else { continue }
+            step(id, method: targetMethod, delta: delta, showOSD: showOSD && id == displayID)
+        }
     }
 
     /// One brightness key press sent on as the system's own Option-Shift
@@ -1637,6 +1665,7 @@ final class BrightnessService: ObservableObject {
 
         let defaults = UserDefaults.standard
         let followsPointer = defaults.bool(forKey: DefaultsKey.brightnessKeysEnabled)
+        let allDisplays = defaults.bool(forKey: DefaultsKey.brightnessKeysAllDisplays)
         let showsOverlay = defaults.bool(forKey: DefaultsKey.brightnessOSDEnabled)
         let keyStep = self.keyStep
         let delta = keyStep.limited(ownedDelta)
@@ -1667,7 +1696,7 @@ final class BrightnessService: ObservableObject {
                 return leaveToSystem()
             }
             displayID = id
-        } else if wantsBrightnessOSD, let systemTarget = systemKeyTarget {
+        } else if wantsBrightnessOSD || allDisplays, let systemTarget = systemKeyTarget {
             // With pointer routing off, keep the native target. In clamshell
             // mode this can be a system-managed external display.
             displayID = systemTarget.id
@@ -1693,14 +1722,17 @@ final class BrightnessService: ObservableObject {
             guard BrightnessSupport.stepsSystemRoutedDisplay(
                 followsPointer: followsPointer,
                 displayIsBuiltIn: isBuiltIn,
-                overlayReplacesNative: wantsBrightnessOSD && brightnessOSDSupported
+                overlayReplacesNative: wantsBrightnessOSD && brightnessOSDSupported,
+                allDisplays: allDisplays
             ), BrightnessBridge.setBrightness != nil else {
                 // The built-in panel keeps the system's native brightness
                 // handling and animation unless the overlay replaces it.
                 return leaveToSystem()
             }
             swallowedMediaKeys.insert(increases)
-            if let current = currentSystemBrightness(
+            if allDisplays {
+                stepKeyPress(displayID, method: route.method, delta: delta, showOSD: showsOverlay)
+            } else if let current = currentSystemBrightness(
                 for: displayID,
                 fallback: displays.first(where: { $0.id == displayID })?.brightness
             ) {
@@ -1711,11 +1743,11 @@ final class BrightnessService: ObservableObject {
             // Both halves are replaced so the system never draws a second OSD.
             return nil
         }
-        guard followsPointer else {
+        guard followsPointer || allDisplays else {
             return leaveToSystem()
         }
         swallowedMediaKeys.insert(increases)
-        step(displayID, method: route.method, delta: delta, showOSD: showsOverlay)
+        stepKeyPress(displayID, method: route.method, delta: delta, showOSD: showsOverlay)
         return nil
     }
 

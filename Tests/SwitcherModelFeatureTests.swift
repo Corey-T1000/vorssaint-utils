@@ -2963,6 +2963,8 @@ enum SwitcherModelFeatureTests {
                "brightness control arrives switched off")
         suite.expect(registeredDefaults[DefaultsKey.brightnessKeysEnabled] as? Bool == false,
                "pointer-following brightness keys arrive switched off")
+        suite.expect(registeredDefaults[DefaultsKey.brightnessKeysAllDisplays] as? Bool == false,
+               "brightness keys moving every display arrive switched off")
         suite.expect(registeredDefaults[DefaultsKey.brightnessOSDEnabled] as? Bool == false,
                "brightness adjustment overlay arrives switched off")
         suite.expect(registeredDefaults[DefaultsKey.keyboardBrightnessDecreaseShortcut] as? String
@@ -2989,6 +2991,7 @@ enum SwitcherModelFeatureTests {
             let displayShortcutSettings: [String: Any] = [
                 DefaultsKey.brightnessControlEnabled: enabled,
                 DefaultsKey.brightnessKeysEnabled: enabled,
+                DefaultsKey.brightnessKeysAllDisplays: enabled,
                 DefaultsKey.brightnessOSDEnabled: enabled,
                 DefaultsKey.displayBrightnessShortcutsEnabled: enabled,
                 DefaultsKey.displayBrightnessDecreaseShortcut: "control+command:27",

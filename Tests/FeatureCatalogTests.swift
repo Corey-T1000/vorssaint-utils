@@ -1406,6 +1406,9 @@ enum FeatureCatalogTests {
         suite.expect(activeSet(.accessibility, on: [DefaultsKey.brightnessControlEnabled,
                                               DefaultsKey.brightnessOSDEnabled]).contains(.brightness),
                "brightness uses accessibility for the adjustment overlay")
+        suite.expect(activeSet(.accessibility, on: [DefaultsKey.brightnessControlEnabled,
+                                              DefaultsKey.brightnessKeysAllDisplays]).contains(.brightness),
+               "brightness uses accessibility when its keys move every display")
         suite.expect(!activeSet(.accessibility, on: [DefaultsKey.brightnessControlEnabled])
                 .contains(.brightness),
                "brightness sliders alone never use accessibility")
@@ -1857,11 +1860,13 @@ enum FeatureCatalogTests {
                 && AppFeature.scratchpad.energyProfile == .idle,
                "energy badges tell the honest mechanism per feature")
         let brightnessEnergyKeys = [DefaultsKey.brightnessKeysEnabled, DefaultsKey.brightnessOSDEnabled,
-                                    DefaultsKey.brightnessKeyStep]
+                                    DefaultsKey.brightnessKeyStep, DefaultsKey.brightnessKeysAllDisplays]
         let previousBrightnessEnergy = brightnessEnergyKeys.map { UserDefaults.standard.object(forKey: $0) }
         func brightnessEnergy(followsPointer: Bool = false, overlay: Bool = false,
-                              step: BrightnessSupport.KeyStep = .standard) -> FeatureEnergyProfile {
+                              step: BrightnessSupport.KeyStep = .standard,
+                              allDisplays: Bool = false) -> FeatureEnergyProfile {
             UserDefaults.standard.set(followsPointer, forKey: DefaultsKey.brightnessKeysEnabled)
+            UserDefaults.standard.set(allDisplays, forKey: DefaultsKey.brightnessKeysAllDisplays)
             UserDefaults.standard.set(overlay, forKey: DefaultsKey.brightnessOSDEnabled)
             UserDefaults.standard.set(step.rawValue, forKey: DefaultsKey.brightnessKeyStep)
             return AppFeature.brightness.energyProfile
@@ -1869,7 +1874,8 @@ enum FeatureCatalogTests {
         suite.expect(brightnessEnergy() == .idle
                 && brightnessEnergy(followsPointer: true) == .keyboard
                 && brightnessEnergy(overlay: true) == .keyboard
-                && brightnessEnergy(step: .half) == .keyboard,
+                && brightnessEnergy(step: .half) == .keyboard
+                && brightnessEnergy(allDisplays: true) == .keyboard,
                "brightness listens to the keyboard only while an option answers its keys")
         for (key, value) in zip(brightnessEnergyKeys, previousBrightnessEnergy) {
             UserDefaults.standard.set(value, forKey: key)
@@ -2822,6 +2828,22 @@ enum FeatureCatalogTests {
         suite.expect(BrightnessSupport.answersPlainBrightnessKeys(followsPointer: false, overlayReplacesNative: false,
                                                                   finerSteps: true),
                "a finer key step answers other keyboards' plain brightness keys too")
+        // Brightness keys moving every display: the system only ever moves
+        // its own target, so the app takes every press, built-in included.
+        suite.expect(BrightnessSupport.answersPlainBrightnessKeys(followsPointer: false, overlayReplacesNative: false,
+                                                                  finerSteps: false, allDisplays: true),
+               "moving every display answers other keyboards' plain brightness keys too")
+        suite.expect(BrightnessSupport.stepsSystemRoutedDisplay(followsPointer: false,
+                                                          displayIsBuiltIn: true,
+                                                          overlayReplacesNative: false,
+                                                          allDisplays: true),
+               "moving every display steps the built-in panel here instead of natively")
+        suite.expect(BrightnessSupport.keyStepTargets(aimedAt: 2, allDisplays: false, eligible: [1, 2, 3]) == [2],
+               "a press moves only its display unless every display is linked")
+        suite.expect(BrightnessSupport.keyStepTargets(aimedAt: 2, allDisplays: true, eligible: [1, 2, 3]) == [1, 3, 2],
+               "a linked press moves every eligible display and ends on the aimed one")
+        suite.expect(BrightnessSupport.keyStepTargets(aimedAt: 9, allDisplays: true, eligible: [1]) == [1, 9],
+               "the aimed display is stepped even when the eligible list lags a rebuild")
 
         // Finer key steps (in-app feature request): one press never moves
         // further than the chosen step, and the system's own quarter step

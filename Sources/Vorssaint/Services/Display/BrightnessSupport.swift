@@ -514,12 +514,23 @@ enum BrightnessSupport {
     }
 
     /// Plain brightness key presses reach the system unless this app answers
-    /// them: to follow the pointer, to show its own overlay or the island in
-    /// place of the system's, or to take a finer step. Only then is their
-    /// keystroke tap worth it.
+    /// them: to follow the pointer, to move every display, to show its own
+    /// overlay or the island in place of the system's, or to take a finer
+    /// step. Only then is their keystroke tap worth it.
     static func answersPlainBrightnessKeys(followsPointer: Bool, overlayReplacesNative: Bool,
-                                           finerSteps: Bool) -> Bool {
-        followsPointer || overlayReplacesNative || finerSteps
+                                           finerSteps: Bool, allDisplays: Bool = false) -> Bool {
+        followsPointer || allDisplays || overlayReplacesNative || finerSteps
+    }
+
+    /// The displays one brightness key press moves: the one it is aimed at,
+    /// or with the keys moving every display, each eligible display by the
+    /// same amount from its own level, so their relative levels hold until
+    /// one of them reaches either end. The aimed display goes last, so the
+    /// island ends on its level.
+    static func keyStepTargets(aimedAt target: UInt32, allDisplays: Bool,
+                               eligible: [UInt32]) -> [UInt32] {
+        guard allDisplays else { return [target] }
+        return eligible.filter { $0 != target } + [target]
     }
 
     /// The display a plain brightness key moves: the one under the pointer
@@ -562,10 +573,13 @@ enum BrightnessSupport {
     /// press the pointer routes to any other display (an Apple pipeline
     /// external monitor, or any display in clamshell mode) has to be stepped
     /// here or it lands on the wrong screen. The built-in panel keeps the
-    /// native handling and its animation unless the overlay replaces it.
+    /// native handling and its animation unless the overlay replaces it, or
+    /// the keys move every display: the system would only ever move its own.
     static func stepsSystemRoutedDisplay(followsPointer: Bool,
                                          displayIsBuiltIn: Bool,
-                                         overlayReplacesNative: Bool) -> Bool {
+                                         overlayReplacesNative: Bool,
+                                         allDisplays: Bool = false) -> Bool {
+        if allDisplays { return true }
         if followsPointer, !displayIsBuiltIn { return true }
         return overlayReplacesNative
     }
