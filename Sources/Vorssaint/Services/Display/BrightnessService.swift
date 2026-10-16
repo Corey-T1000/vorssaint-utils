@@ -1524,6 +1524,7 @@ final class BrightnessService: ObservableObject {
             keyLinks = [:]
         }
         keyLinkLead = (lead, level)
+        var linkedLevels: [Double] = []
         for display in displays where display.id != lead && display.isActive && display.method != nil
             && !pendingDisplayIDs.contains(display.id) {
             let current = display.method == .system
@@ -1534,7 +1535,14 @@ final class BrightnessService: ObservableObject {
             keyLinks[display.id] = BrightnessSupport.KeyLink(offset: offset, level: linked)
             Self.log.log("linked step display \(display.id) \(current) to \(linked)")
             setBrightness(linked, for: display.id, smooth: true, announces: false)
+            linkedLevels.append(linked)
         }
+        if !linkedLevels.isEmpty { announceLinkedLevels(level, linkedLevels) }
+    }
+
+    /// The island's brightness notice shows every display a key moved.
+    private func announceLinkedLevels(_ level: Double, _ linked: [Double]) {
+        _ = NotchService.shared.showBrightness(level, linked: linked)
     }
 
     /// One brightness key press sent on as the system's own Option-Shift

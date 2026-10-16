@@ -73,6 +73,8 @@ enum BrightnessStepTests {
         var keyLinkLead: (id: UInt32, level: Double)?
         var keyLinks: [UInt32: BrightnessSupport.KeyLink] = [:]
         var linkedWrites: [(id: UInt32, level: Double, announces: Bool)] = []
+        var announced: [[Double]] = []
+        func announceLinkedLevels(_ level: Double, _ linked: [Double]) { announced.append([level] + linked) }
         func setBrightness(_ value: Double, for id: UInt32, showOSD: Bool = false,
                            smooth: Bool = false, announces: Bool = true) {
             linkedWrites.append((id, value, announces))
@@ -247,6 +249,9 @@ enum BrightnessStepTests {
         suite.expect(link.linkedWrites.map(\.id) == [2] && near(link.displays[1].brightness, 0.6625)
                      && link.linkedWrites.allSatisfy { !$0.announces },
                      "a linked display follows the aimed one by the same amount, and only an active, settled one does")
+        suite.expect(link.announced.count == 1 && near(link.announced.first?.first, 0.5625)
+                     && near(link.announced.first?.last, 0.6625),
+                     "the island's notice shows the aimed display's level and each linked display's")
         for _ in 0..<7 { linkedPress(0.0625) }
         suite.expect(near(link.displays[0].brightness, 1) && near(link.displays[1].brightness, 1),
                      "a linked display stops at 100% while the aimed one catches up")
@@ -265,7 +270,8 @@ enum BrightnessStepTests {
         UserDefaults.standard.allDisplays = false
         let writes = link.linkedWrites.count
         linkedPress(0.0625)
-        suite.expect(link.linkedWrites.count == writes && link.keyLinks.isEmpty && link.keyLinkLead == nil,
+        suite.expect(link.linkedWrites.count == writes && link.keyLinks.isEmpty && link.keyLinkLead == nil
+                     && link.announced.count == 12,
                      "with the keys moving one display, the others stay put and the gaps are forgotten")
     }
 }
