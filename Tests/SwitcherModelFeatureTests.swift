@@ -551,6 +551,21 @@ enum SwitcherModelFeatureTests {
                    frontmostBundleIdentifier: nil,
                    excludedBundleIdentifiers: ["com.example.focused"]),
                "window preview capture continues away from chosen apps or without a foreground app")
+        let javaPath = "/Users/tester/Library/Application Support/minecraft/runtime/java-runtime-delta/bin/java"
+        suite.expect(SwitcherSupport.shouldPausePreviewCapture(
+            frontmostBundleIdentifier: nil,
+            frontmostExecutablePath: javaPath,
+            excludedBundleIdentifiers: ["com.example.focused", javaPath]),
+               "window preview capture pauses while a listed program that is not an app is in front")
+        suite.expect(!SwitcherSupport.shouldPausePreviewCapture(
+            frontmostBundleIdentifier: nil,
+            frontmostExecutablePath: "/Users/tester/bin/other",
+            excludedBundleIdentifiers: [javaPath])
+               && !SwitcherSupport.shouldPausePreviewCapture(
+                   frontmostBundleIdentifier: "com.example.other",
+                   frontmostExecutablePath: javaPath,
+                   excludedBundleIdentifiers: [javaPath]),
+               "a listed path pauses only that program, never an app answering to its own bundle identifier")
         suite.expect(SpaceHopSupport.isParkedOnHiddenSpace(windowSpaces: [4], visibleSpaces: [3]),
                "a window whose only Space is not visible is parked on a hidden Space")
         suite.expect(!SpaceHopSupport.isParkedOnHiddenSpace(windowSpaces: [3], visibleSpaces: [3]),
@@ -2035,9 +2050,10 @@ enum SwitcherModelFeatureTests {
                "headphone disconnect volume lowering is opt-in")
         suite.expect(registeredDefaults[DefaultsKey.mixerHeadphonesDisconnectVolumePercent] as? Int
                == Defaults.defaultMixerHeadphonesDisconnectVolumePercent,
-               "headphone disconnect protection starts at an audible volume, never at silence")
+               "headphone disconnect protection starts at an audible volume until silence is chosen")
+        // Zero is now a choice, so the default is held to the old audible floor.
         suite.expect(Defaults.defaultMixerHeadphonesDisconnectVolumePercent
-               >= Defaults.minimumMixerHeadphonesDisconnectVolumePercent
+               >= Defaults.legacyMixerHeadphonesDisconnectVolumeFloor
                && Defaults.defaultMixerHeadphonesDisconnectVolumePercent < 100,
                "the headphone disconnect default is a real reduction that can still be heard")
         suite.expect(registeredDefaults[DefaultsKey.mixerShowFinder] as? Bool == true,
@@ -3772,6 +3788,13 @@ enum SwitcherModelFeatureTests {
         suite.expect(!PreviewProvider.captureIsPaused(excludedAppsKey: DefaultsKey.windowPreviewExcludedApps)
                 && PreviewProvider.captureIsPaused(excludedAppsKey: DefaultsKey.switcherPreviewExcludedApps),
                "an app on the switcher's list pauses only switcher captures")
+        let javaRuntime = "/Users/tester/Library/Application Support/minecraft/runtime/java-runtime-delta/bin/java"
+        previewDefaults.lists[DefaultsKey.switcherPreviewExcludedApps] = ["com.example.game", javaRuntime]
+        PreviewProvider.NSWorkspace.shared.frontmostApplication = .init(
+            bundleIdentifier: nil, executableURL: URL(fileURLWithPath: javaRuntime))
+        suite.expect(PreviewProvider.captureIsPaused(excludedAppsKey: DefaultsKey.switcherPreviewExcludedApps)
+                && !PreviewProvider.captureIsPaused(excludedAppsKey: DefaultsKey.windowPreviewExcludedApps),
+               "a game's Java runtime on the switcher's list pauses switcher captures while it is in front")
         let defaultSwitcherHints = SwitcherSupport.shortcutHints(for: .switcherDefault,
                                                                  windowShortcut: .switcherWindowDefault)
         // Grave and J print the cap the active keyboard layout carries, not the
@@ -6572,7 +6595,7 @@ extension SwitcherModelFeatureTests {
             func stringArray(forKey key: String) -> [String]? { lists[key] }
         }
         final class NSWorkspace {
-            struct App { let bundleIdentifier: String? }
+            struct App { let bundleIdentifier: String?; var executableURL: URL? = nil }
             static let shared = NSWorkspace()
             var frontmostApplication: App?
         }
