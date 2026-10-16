@@ -2842,12 +2842,15 @@ enum FeatureCatalogTests {
                                                           overlayReplacesNative: false,
                                                           allDisplays: true),
                "moving every display steps the built-in panel here instead of natively")
-        suite.expect(BrightnessSupport.keyStepTargets(aimedAt: 2, allDisplays: false, eligible: [1, 2, 3]) == [2],
-               "a press moves only its display unless every display is linked")
-        suite.expect(BrightnessSupport.keyStepTargets(aimedAt: 2, allDisplays: true, eligible: [1, 2, 3]) == [1, 3, 2],
-               "a linked press moves every eligible display and ends on the aimed one")
-        suite.expect(BrightnessSupport.keyStepTargets(aimedAt: 9, allDisplays: true, eligible: [1]) == [1, 9],
-               "the aimed display is stepped even when the eligible list lags a rebuild")
+        let squeezed = BrightnessSupport.KeyLink(offset: 0.1, level: 1)
+        suite.expect(BrightnessSupport.keyLinkOffset(squeezed, current: 1, aimedLevel: 0.95) == 0.1
+                     && BrightnessSupport.keyLinkOffset(squeezed, current: 0.995, aimedLevel: 0.95) == 0.1,
+               "a linked display still where the keys left it keeps its remembered gap")
+        suite.expect(abs(BrightnessSupport.keyLinkOffset(squeezed, current: 0.8, aimedLevel: 0.95) + 0.15) < 0.000_001
+                     && abs(BrightnessSupport.keyLinkOffset(nil, current: 0.4, aimedLevel: 0.5) + 0.1) < 0.000_001,
+               "a display moved some other way, or not linked yet, keeps the gap it shows now")
+        suite.expect(!BrightnessSupport.keyLinkHolds(nil, current: 0.5),
+               "no remembered level never holds a link")
 
         // Finer key steps (in-app feature request): one press never moves
         // further than the chosen step, and the system's own quarter step

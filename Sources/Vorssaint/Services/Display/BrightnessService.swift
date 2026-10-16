@@ -196,6 +196,11 @@ final class BrightnessService: ObservableObject {
     /// all means a read is in flight for that display. Main thread only, like
     /// the key presses that fill it (issue #370).
     private var ddcPendingSteps: [CGDirectDisplayID: Double] = [:]
+    /// With the brightness keys moving every display: the display the last
+    /// press was aimed at and the level it got, and how each other display
+    /// follows it. Main thread only, like the key presses.
+    private var keyLinkLead: (id: CGDirectDisplayID, level: Double)?
+    private var keyLinks: [CGDirectDisplayID: BrightnessSupport.KeyLink] = [:]
     private var drainScheduled = false
     /// Session memory for write-only monitors, so their slider does not jump
     /// back to a placeholder between panel openings. Each value remembers
@@ -1494,20 +1499,41 @@ final class BrightnessService: ObservableObject {
     }
 
     /// Steps the display a key press or shortcut is aimed at. With the keys
-    /// moving every display, each other active display steps by the same
-    /// amount from its own level; the overlay stays on the aimed display.
+    /// moving every display, the others follow it once its step lands
+    /// (`moveLinkedDisplays`); the overlay stays on the aimed display.
     private func stepKeyPress(_ displayID: CGDirectDisplayID,
                               method: BrightnessDisplay.Method,
                               delta: Double,
                               showOSD: Bool) {
-        let allDisplays = UserDefaults.standard.bool(forKey: DefaultsKey.brightnessKeysAllDisplays)
-        let eligible = displays.filter { $0.isActive && $0.method != nil
-            && !pendingDisplayIDs.contains($0.id) }
-        for id in BrightnessSupport.keyStepTargets(aimedAt: displayID, allDisplays: allDisplays,
-                                                   eligible: eligible.map(\.id)) {
-            guard let targetMethod = id == displayID ? method
-                    : eligible.first(where: { $0.id == id })?.method else { continue }
-            step(id, method: targetMethod, delta: delta, showOSD: showOSD && id == displayID)
+        step(displayID, method: method, delta: delta, showOSD: showOSD)
+    }
+
+    /// Brings every other active display to the aimed display's new level
+    /// plus the gap it keeps to it, so a key press moves them all together.
+    /// A gap is remembered while both displays sit where the keys left them,
+    /// so one that 0% or 100% squeezed comes back on the way out; moving
+    /// either display any other way (a slider, the monitor's own buttons)
+    /// makes the gap it then shows the one to keep.
+    private func moveLinkedDisplays(after lead: CGDirectDisplayID, from before: Double, to level: Double) {
+        guard UserDefaults.standard.bool(forKey: DefaultsKey.brightnessKeysAllDisplays) else {
+            keyLinkLead = nil
+            keyLinks = [:]
+            return
+        }
+        if keyLinkLead?.id != lead || !BrightnessSupport.keyLinkHolds(keyLinkLead?.level, current: before) {
+            keyLinks = [:]
+        }
+        keyLinkLead = (lead, level)
+        for display in displays where display.id != lead && display.isActive && display.method != nil
+            && !pendingDisplayIDs.contains(display.id) {
+            let current = display.method == .system
+                ? currentSystemBrightness(for: display.id, fallback: display.brightness) ?? display.brightness
+                : display.brightness
+            let offset = BrightnessSupport.keyLinkOffset(keyLinks[display.id], current: current, aimedLevel: before)
+            let linked = BrightnessSupport.steppedBrightness(level, delta: offset)
+            keyLinks[display.id] = BrightnessSupport.KeyLink(offset: offset, level: linked)
+            Self.log.log("linked step display \(display.id) \(current) to \(linked)")
+            setBrightness(linked, for: display.id, smooth: true, announces: false)
         }
     }
 
@@ -1634,6 +1660,7 @@ final class BrightnessService: ObservableObject {
         let stepped = BrightnessSupport.steppedBrightness(current, delta: delta)
         Self.log.log("key step display \(displayID) route \(String(describing: method), privacy: .public) \(current) to \(stepped)")
         setBrightness(stepped, for: displayID, showOSD: showOSD, smooth: true)
+        moveLinkedDisplays(after: displayID, from: current, to: stepped)
     }
 
     /// Routes a handled brightness key press to the pointer display when that

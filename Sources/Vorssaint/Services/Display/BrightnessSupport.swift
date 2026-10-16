@@ -539,15 +539,30 @@ enum BrightnessSupport {
         followsPointer || allDisplays || overlayReplacesNative || finerSteps
     }
 
-    /// The displays one brightness key press moves: the one it is aimed at,
-    /// or with the keys moving every display, each eligible display by the
-    /// same amount from its own level, so their relative levels hold until
-    /// one of them reaches either end. The aimed display goes last, so the
-    /// island ends on its level.
-    static func keyStepTargets(aimedAt target: UInt32, allDisplays: Bool,
-                               eligible: [UInt32]) -> [UInt32] {
-        guard allDisplays else { return [target] }
-        return eligible.filter { $0 != target } + [target]
+    /// How a display linked to the brightness keys follows the display a
+    /// press is aimed at: the gap it keeps to that display, and the level the
+    /// keys last gave it.
+    struct KeyLink: Equatable {
+        let offset: Double
+        let level: Double
+    }
+
+    /// Two levels closer than this are the same one: a system read comes back
+    /// as a Float and a monitor rounds to its own steps.
+    static let keyLinkTolerance = 0.01
+
+    static func keyLinkHolds(_ remembered: Double?, current: Double) -> Bool {
+        guard let remembered else { return false }
+        return abs(current - remembered) < keyLinkTolerance
+    }
+
+    /// The gap a linked display keeps to the aimed display. While it still
+    /// sits where the keys left it, the remembered gap holds even if 0% or
+    /// 100% squeezed it, so the gap comes back on the way out. Once it was
+    /// moved some other way, the gap it shows now is the one to keep.
+    static func keyLinkOffset(_ link: KeyLink?, current: Double, aimedLevel: Double) -> Double {
+        if let link, keyLinkHolds(link.level, current: current) { return link.offset }
+        return current - aimedLevel
     }
 
     /// The display a plain brightness key moves: the one under the pointer
